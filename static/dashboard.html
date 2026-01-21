@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Passkey Authentication</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>👋 Dashboard</h1>
+        <p class="subtitle">Welcome to your secure area</p>
+
+        <div class="card" id="userInfo">
+            <div class="loading">Loading user info...</div>
+        </div>
+
+        <div class="card" id="passkeyList">
+            <h2>🔑 Your Passkeys</h2>
+            <div class="loading">Loading passkeys...</div>
+        </div>
+
+        <div id="message" class="message hidden"></div>
+
+        <button id="addPasskeyBtn" class="btn btn-primary btn-full" style="margin-bottom: 0.5rem;">Add New
+            Passkey</button>
+        <button id="logoutBtn" class="btn btn-secondary btn-full">Logout</button>
+
+        <p class="link-text">
+            <a href="/">← Back to Home</a>
+        </p>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        let currentUser = null;
+
+        // Check authentication and load user info
+        async function loadDashboard() {
+            try {
+                currentUser = await getUser();
+
+                document.getElementById('userInfo').innerHTML = `
+                    <h2>User Details</h2>
+                    <div class="info-row">
+                        <span class="label">Username:</span>
+                        <span class="value">${escapeHtml(currentUser.username)}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">User ID:</span>
+                        <span class="value code">${escapeHtml(currentUser.userId)}</span>
+                    </div>
+                    <div class="success-badge">
+                        ✓ Authenticated via Passkey
+                    </div>
+                `;
+
+                renderPasskeyList(currentUser.passkeys);
+            } catch (error) {
+                window.location.href = '/login.html';
+            }
+        }
+
+        // Render the passkey list
+        function renderPasskeyList(passkeys) {
+            const container = document.getElementById('passkeyList');
+            const canDelete = passkeys.length > 1;
+
+            let html = '<h2>🔑 Your Passkeys</h2>';
+
+            passkeys.forEach((pk, index) => {
+                html += `
+                    <div class="passkey-item" data-id="${escapeHtml(pk.id)}">
+                        <div class="passkey-name">
+                            <span class="passkey-index">${index + 1}.</span>
+                            <input type="text" class="passkey-name-input" value="${escapeHtml(pk.name)}" 
+                                   onchange="handleRename('${escapeHtml(pk.id)}', this.value)">
+                        </div>
+                        <button class="btn-icon btn-delete" 
+                                onclick="handleDelete('${escapeHtml(pk.id)}')"
+                                ${canDelete ? '' : 'disabled title="Cannot remove last passkey"'}>
+                            🗑️
+                        </button>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // Handle rename
+        async function handleRename(id, newName) {
+            const messageEl = document.getElementById('message');
+            try {
+                const result = await renamePasskey(id, newName);
+                renderPasskeyList(result.passkeys);
+                messageEl.className = 'message success';
+                messageEl.textContent = 'Passkey renamed!';
+                setTimeout(() => messageEl.className = 'message hidden', 2000);
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = error.message || 'Failed to rename passkey';
+                loadDashboard(); // Reload to reset
+            }
+        }
+
+        // Handle delete
+        async function handleDelete(id) {
+            if (!confirm('Are you sure you want to remove this passkey?')) return;
+
+            const messageEl = document.getElementById('message');
+            try {
+                const result = await deletePasskey(id);
+                renderPasskeyList(result.passkeys);
+                messageEl.className = 'message success';
+                messageEl.textContent = 'Passkey removed!';
+                setTimeout(() => messageEl.className = 'message hidden', 2000);
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = error.message || 'Failed to remove passkey';
+            }
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Logout handler
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            await logout();
+            window.location.href = '/';
+        });
+
+        // Add passkey handler
+        document.getElementById('addPasskeyBtn').addEventListener('click', async () => {
+            const name = prompt('Enter a name for the new passkey:', 'My Passkey');
+            if (!name) return;
+
+            const messageEl = document.getElementById('message');
+            try {
+                messageEl.className = 'message';
+                messageEl.textContent = 'Adding new passkey...';
+
+                await addPasskey(name);
+
+                messageEl.className = 'message success';
+                messageEl.textContent = 'Passkey added!';
+
+                loadDashboard();
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = error.message || 'Failed to add passkey';
+            }
+        });
+
+        // Load dashboard on page load
+        loadDashboard();
+    </script>
+</body>
+
+</html>

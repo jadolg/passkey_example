@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Passkey Authentication</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔑 Login</h1>
+        <p class="subtitle">Sign in with your passkey</p>
+
+        <div class="card">
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required placeholder="Enter your username"
+                        autocomplete="username">
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-full">
+                    Login with Passkey
+                </button>
+            </form>
+
+            <div id="message" class="message hidden"></div>
+        </div>
+
+        <p class="link-text">
+            Don't have an account? <a href="register.html">Register</a>
+        </p>
+        <p class="link-text">
+            <a href="/">← Back to Home</a>
+        </p>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        // Check if already logged in
+        (async () => {
+            try {
+                await getUser();
+                window.location.href = '/dashboard.html';
+            } catch (e) {
+                // Not logged in, stay on this page
+            }
+        })();
+
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value.trim();
+            const messageEl = document.getElementById('message');
+
+            try {
+                messageEl.className = 'message';
+                messageEl.textContent = 'Starting login...';
+
+                await login(username);
+
+                messageEl.className = 'message success';
+                messageEl.textContent = 'Login successful! Redirecting...';
+
+                setTimeout(() => {
+                    window.location.href = '/dashboard.html';
+                }, 1000);
+            } catch (error) {
+                messageEl.className = 'message error';
+                messageEl.textContent = error.message || 'Login failed';
+            }
+        });
+    </script>
+</body>
+
+</html>
