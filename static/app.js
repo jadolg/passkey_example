@@ -66,7 +66,7 @@ async function register(username) {
     };
 
     const finishResponse = await fetch(
-        `/api/register/finish?username=${encodeURIComponent(username)}&sessionId=${encodeURIComponent(sessionId)}`,
+        `/api/register/finish?sessionId=${encodeURIComponent(sessionId)}`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

@@ -22,21 +22,30 @@ const (
 	cookieName  = "auth_token"
 )
 
+// PendingRegistration holds data for users being registered
+type PendingRegistration struct {
+	Username string
+	UserID   []byte
+	Session  *webauthn.SessionData
+}
+
 // Server holds all dependencies
 type Server struct {
-	webAuthn   *webauthn.WebAuthn
-	store      *storage.Store
-	jwt        *auth.JWTManager
-	sessions   map[string]*webauthn.SessionData
-	sessionsMu sync.RWMutex
+	webAuthn               *webauthn.WebAuthn
+	store                  *storage.Store
+	jwt                    *auth.JWTManager
+	sessions               map[string]*webauthn.SessionData
+	sessionsMu             sync.RWMutex
+	pendingRegistrations   map[string]*PendingRegistration
+	pendingRegistrationsMu sync.RWMutex
 }
 
 func main() {
 	// Initialize WebAuthn
 	wa, err := auth.NewWebAuthn(auth.Config{
 		RPDisplayName: "Passkey Example",
-		RPID:          "localhost",
-		RPOrigins:     []string{"http://localhost:8080"},
+		RPID:          "bf01fe817348.ngrok-free.app",
+		RPOrigins:     []string{"https://bf01fe817348.ngrok-free.app"},
 	})
 	if err != nil {
 		log.Fatalf("Failed to create WebAuthn: %v", err)
@@ -52,10 +61,11 @@ func main() {
 	jwtManager := auth.NewJWTManager(jwtSecret, jwtDuration)
 
 	server := &Server{
-		webAuthn: wa,
-		store:    store,
-		jwt:      jwtManager,
-		sessions: make(map[string]*webauthn.SessionData),
+		webAuthn:             wa,
+		store:                store,
+		jwt:                  jwtManager,
+		sessions:             make(map[string]*webauthn.SessionData),
+		pendingRegistrations: make(map[string]*PendingRegistration),
 	}
 
 	// Setup routes
@@ -116,29 +126,30 @@ func (s *Server) handleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	userID := make([]byte, 32)
 	rand.Read(userID)
 
-	// Create temporary user for registration
-	user, err := s.store.CreateUser(req.Username, userID)
-	if err != nil {
-		if err == storage.ErrUserExists {
-			http.Error(w, "User already exists", http.StatusConflict)
-			return
-		}
-		http.Error(w, "Failed to create user", http.StatusInternalServerError)
-		return
+	// Create a temporary in-memory user for the WebAuthn ceremony
+	// The user will only be persisted after successful passkey registration
+	tempUser := &storage.User{
+		ID:          userID,
+		Name:        req.Username,
+		DisplayName: req.Username,
 	}
 
 	// Begin registration
-	options, session, err := s.webAuthn.BeginRegistration(user)
+	options, session, err := s.webAuthn.BeginRegistration(tempUser)
 	if err != nil {
 		http.Error(w, "Failed to begin registration", http.StatusInternalServerError)
 		return
 	}
 
-	// Store session
+	// Store session and pending registration data
 	sessionID := generateSessionID()
-	s.sessionsMu.Lock()
-	s.sessions[sessionID] = session
-	s.sessionsMu.Unlock()
+	s.pendingRegistrationsMu.Lock()
+	s.pendingRegistrations[sessionID] = &PendingRegistration{
+		Username: req.Username,
+		UserID:   userID,
+		Session:  session,
+	}
+	s.pendingRegistrationsMu.Unlock()
 
 	// Return options with session ID
 	response := struct {
@@ -155,51 +166,53 @@ func (s *Server) handleRegisterBegin(w http.ResponseWriter, r *http.Request) {
 
 // handleRegisterFinish completes the registration ceremony
 func (s *Server) handleRegisterFinish(w http.ResponseWriter, r *http.Request) {
-	// Parse the username and session from query
-	username := r.URL.Query().Get("username")
 	sessionID := r.URL.Query().Get("sessionId")
 
-	if username == "" || sessionID == "" {
-		http.Error(w, "Missing username or session ID", http.StatusBadRequest)
+	if sessionID == "" {
+		http.Error(w, "Missing session ID", http.StatusBadRequest)
 		return
 	}
 
-	// Get user
-	user, err := s.store.GetUser(username)
-	if err != nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Get session
-	s.sessionsMu.RLock()
-	session, ok := s.sessions[sessionID]
-	s.sessionsMu.RUnlock()
+	// Get pending registration
+	s.pendingRegistrationsMu.RLock()
+	pending, ok := s.pendingRegistrations[sessionID]
+	s.pendingRegistrationsMu.RUnlock()
 
 	if !ok {
 		http.Error(w, "Session not found", http.StatusBadRequest)
 		return
 	}
 
+	// Create temporary user for completing registration
+	tempUser := &storage.User{
+		ID:          pending.UserID,
+		Name:        pending.Username,
+		DisplayName: pending.Username,
+	}
+
 	// Complete registration
-	credential, err := s.webAuthn.FinishRegistration(user, *session, r)
+	credential, err := s.webAuthn.FinishRegistration(tempUser, *pending.Session, r)
 	if err != nil {
 		log.Printf("FinishRegistration error: %v", err)
 		http.Error(w, "Failed to finish registration", http.StatusBadRequest)
 		return
 	}
 
-	// Save credential
-	user.AddCredential("Initial Passkey", *credential)
-	if err := s.store.UpdateUser(user); err != nil {
-		http.Error(w, "Failed to save credential", http.StatusInternalServerError)
+	// Now create the user in the database with the credential
+	user, err := s.store.CreateUserWithCredential(pending.Username, pending.UserID, "Initial Passkey", *credential)
+	if err != nil {
+		if err == storage.ErrUserExists {
+			http.Error(w, "User already exists", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Failed to create user", http.StatusInternalServerError)
 		return
 	}
 
-	// Clean up session
-	s.sessionsMu.Lock()
-	delete(s.sessions, sessionID)
-	s.sessionsMu.Unlock()
+	// Clean up pending registration
+	s.pendingRegistrationsMu.Lock()
+	delete(s.pendingRegistrations, sessionID)
+	s.pendingRegistrationsMu.Unlock()
 
 	// Generate JWT token
 	token, err := s.jwt.Generate(base64.URLEncoding.EncodeToString(user.ID), user.Name)

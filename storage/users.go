@@ -183,6 +183,39 @@ func (s *Store) CreateUser(name string, id []byte) (*User, error) {
 	return user, nil
 }
 
+// CreateUserWithCredential creates a new user with their first credential atomically.
+// This ensures users are never created without at least one passkey.
+func (s *Store) CreateUserWithCredential(name string, id []byte, passkeyName string, cred webauthn.Credential) (*User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check if user already exists
+	if _, ok := s.users[name]; ok {
+		return nil, ErrUserExists
+	}
+
+	user := &User{
+		ID:          id,
+		Name:        name,
+		DisplayName: name,
+		Passkeys: []NamedCredential{
+			{
+				Name:       passkeyName,
+				Credential: cred,
+			},
+		},
+	}
+
+	s.users[name] = user
+
+	if err := s.save(); err != nil {
+		delete(s.users, name)
+		return nil, err
+	}
+
+	return user, nil
+}
+
 // UpdateUser updates an existing user
 func (s *Store) UpdateUser(user *User) error {
 	s.mu.Lock()
